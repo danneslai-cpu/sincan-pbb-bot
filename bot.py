@@ -1,7 +1,7 @@
 import os
 import requests
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
 import uuid
 from datetime import datetime
 
@@ -24,6 +24,7 @@ def supabase_insert(data):
         'Prefer': 'return=minimal'
     }
     response = requests.post(url, json=data, headers=headers)
+    print(f"Supabase insert status: {response.status_code} - {response.text}")
     return response.status_code == 201
 
 def parse_message(text):
@@ -54,6 +55,26 @@ def parse_message(text):
 def format_rupiah(num):
     return f"Rp {int(num):,}".replace(',', '.')
 
+async def format_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📋 FORMAT PENGIRIMAN TRANSFER\n\n"
+        "DIVISI: Nama Web\n"
+        "ASAL: BNI - 1234567890 - Nama\n"
+        "TUJUAN: BCA - 1234567890 - Nama\n"
+        "JML: 1000000\n"
+        "ADM: 2500\n\n"
+        "📌 Catatan:\n"
+        "• Divisi: UBM / BINUS / UNTAR\n"
+        "• Format rekening: BANK - NOMORREK - NAMA\n"
+        "• Pakai spasi sebelum dan sesudah tanda -\n"
+        "• ADM boleh dikosongkan jika tidak ada biaya admin\n\n"
+        "Contoh tanpa admin:\n\n"
+        "DIVISI: Nama Web\n"
+        "ASAL: BNI - 1234567890 - Nama\n"
+        "TUJUAN: BCA - 1234567890 - Nama\n"
+        "JML: 1000000"
+    )
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     chat_id = update.message.chat_id
@@ -64,12 +85,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not parsed:
         await update.message.reply_text(
             "❌ Format pesan salah!\n\n"
-            "Format yang benar:\n"
-            "DIVISI: UBM\n"
-            "ASAL: BNI - 2014428426 - Nama\n"
-            "TUJUAN: BCA - 7180609452 - Nama\n"
-            "JML: 9000000\n"
-            "ADM: 2500 (opsional)"
+            "Ketik /format untuk melihat format yang benar."
         )
         return
 
@@ -117,6 +133,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler('format', format_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print('Bot berjalan...')
     app.run_polling(drop_pending_updates=True)
