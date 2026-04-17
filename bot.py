@@ -2,9 +2,12 @@ import os
 import requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
+import uuid
+from datetime import datetime
 
-BOT_TOKEN = os.environ.get('BOT_TOKEN', '8307314684:AAF_W5rHQAXjc4FMJMtAHAFDEUKVqfQ11F0')
-SHEETDB_URL = os.environ.get('SHEETDB_URL', 'https://sheetdb.io/api/v1/2s0isd6qz46v9')
+BOT_TOKEN = os.environ.get('BOT_TOKEN', '8307314684:AAF_W5rHQAXjc4FMJMtAHAFDEUKVqfQl1F0')
+SUPABASE_URL = os.environ.get('SUPABASE_URL', 'https://szuatjsluscavohdgjuy.supabase.co')
+SUPABASE_KEY = os.environ.get('SUPABASE_KEY', 'sb_publishable_SCssZgbMItHHpIV2v4H8Zw_i_rwgXXW')
 
 DIVISI_MAP = {
     'UBM': 'https://reuniubm.com/mimin/adminarea',
@@ -12,16 +15,29 @@ DIVISI_MAP = {
     'UNTAR': 'https://flyhighunstopable.com/mimin/adminarea'
 }
 
+def supabase_insert(data):
+    url = f"{SUPABASE_URL}/rest/v1/antrian"
+    headers = {
+        'apikey': SUPABASE_KEY,
+        'Authorization': f'Bearer {SUPABASE_KEY}',
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+    }
+    response = requests.post(url, json=data, headers=headers)
+    return response.status_code == 201
+
 def parse_message(text):
     try:
-        lines = text.strip().split('\n')
         data = {}
-        for line in lines:
+        for line in text.strip().split('\n'):
             if ':' in line:
-                key, _, val = line.partition(':')
+                key, val = line.split(':', 1)
                 data[key.strip().upper()] = val.strip()
 
+        print(f"Parsed data: {data}")
+
         if not all(k in data for k in ['DIVISI', 'ASAL', 'TUJUAN', 'JML']):
+            print(f"Missing keys! Got: {list(data.keys())}")
             return None
 
         return {
@@ -50,8 +66,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "❌ Format pesan salah!\n\n"
             "Format yang benar:\n"
             "DIVISI: UBM\n"
-            "ASAL: BNI-2014428426-Nama\n"
-            "TUJUAN: BCA-7180609452-Nama\n"
+            "ASAL: BNI - 2014428426 - Nama\n"
+            "TUJUAN: BCA - 7180609452 - Nama\n"
             "JML: 9000000\n"
             "ADM: 2500 (opsional)"
         )
@@ -65,26 +81,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    import uuid
-    from datetime import datetime
-
     row = {
-        'ID': str(uuid.uuid4()),
-        'TIMESTAMP': datetime.now().isoformat(),
-        'DIVISI': parsed['divisi'],
-        'URL': DIVISI_MAP[parsed['divisi']],
-        'ASAL': str(parsed['asal']),
-        'TUJUAN': str(parsed['tujuan']),
-        'JUMLAH': parsed['jumlah'],
-        'ADMIN': parsed['admin'],
-        'STATUS': 'PENDING',
-        'CHAT_ID': str(chat_id),
-        'PENGIRIM': sender
+        'id': str(uuid.uuid4()),
+        'timestamp': datetime.now().isoformat(),
+        'divisi': parsed['divisi'],
+        'url': DIVISI_MAP[parsed['divisi']],
+        'asal': parsed['asal'],
+        'tujuan': parsed['tujuan'],
+        'jumlah': parsed['jumlah'],
+        'admin': parsed['admin'],
+        'status': 'PENDING',
+        'chat_id': str(chat_id),
+        'pengirim': sender
     }
 
     try:
-        response = requests.post(SHEETDB_URL, json={'data': row})
-        if response.status_code == 201:
+        success = supabase_insert(row)
+        if success:
             admin_text = format_rupiah(parsed['admin']) if parsed['admin'] > 0 else 'Tidak ada'
             await update.message.reply_text(
                 f"✅ Transaksi diterima!\n\n"
@@ -99,7 +112,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("❌ Gagal menyimpan data, coba lagi!")
     except Exception as e:
-        print(f'SheetDB error: {e}')
+        print(f'Supabase error: {e}')
         await update.message.reply_text("❌ Error koneksi, coba lagi!")
 
 if __name__ == '__main__':
