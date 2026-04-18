@@ -12,7 +12,8 @@ SUPABASE_KEY = os.environ.get('SUPABASE_KEY', 'sb_publishable_SCssZgbMItHHpIV2v4
 DIVISI_MAP = {
     'UBM': 'https://reuniubm.com/mimin/adminarea',
     'BINUS': 'https://smartestbinus.com/mimin/adminarea',
-    'UNTAR': 'https://flyhighunstopable.com/mimin/adminarea'
+    'UNTAR': 'https://flyhighunstopable.com/mimin/adminarea',
+    'BRIO': 'https://surgabrio.com/mimin/'
 }
 
 def supabase_insert(data):
@@ -64,7 +65,7 @@ async def format_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "JML: 1000000\n"
         "ADM: 2500\n\n"
         "📌 Catatan:\n"
-        "• Divisi: UBM / BINUS / UNTAR\n"
+        "• Divisi: UBM / BINUS / UNTAR / BRIO\n"
         "• Format rekening: BANK - NOMORREK - NAMA\n"
         "• Pakai spasi sebelum dan sesudah tanda -\n"
         "• ADM boleh dikosongkan jika tidak ada biaya admin\n\n"
@@ -77,6 +78,11 @@ async def format_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
+
+    # Abaikan pesan biasa yang bukan format transaksi
+    if 'DIVISI' not in text.upper():
+        return
+
     chat_id = update.message.chat_id
     sender = update.message.from_user.first_name if update.message.from_user else 'Unknown'
 
