@@ -1,8 +1,9 @@
 # ============================================================
 # SincanPBB Telegram Bot
-# Versi  : v1.1
+# Versi  : v1.2
 # Update : April 2026
 # Changelog:
+#   v1.2 - Validasi format ADM, tolak jika bukan angka
 #   v1.1 - Tambah divisi MOA, PIM, MOI, MERPUT
 #          Tambah command /list
 #          Urutkan divisi: BINUS, UNTAR, UBM, BRIO, MOA, PIM, MOI, MERPUT
@@ -43,6 +44,22 @@ def supabase_insert(data):
     print(f"Supabase insert status: {response.status_code} - {response.text}")
     return response.status_code == 201
 
+def parse_adm(value):
+    """
+    Parse nilai ADM. Return:
+    - (float, None)  → berhasil
+    - (None, pesan_error) → gagal
+    """
+    try:
+        cleaned = value.strip().replace('.', '').replace(',', '.')
+        # Tolak jika bukan angka sama sekali
+        result = float(cleaned)
+        if result < 0:
+            return None, "ADM tidak boleh negatif"
+        return result, None
+    except ValueError:
+        return None, f"Format ADM salah: '{value}'\nADM harus berupa angka, contoh: 2500"
+
 def parse_message(text):
     try:
         data = {}
@@ -55,18 +72,32 @@ def parse_message(text):
 
         if not all(k in data for k in ['DIVISI', 'ASAL', 'TUJUAN', 'JML']):
             print(f"Missing keys! Got: {list(data.keys())}")
-            return None
+            return None, None
+
+        # Validasi JML
+        try:
+            jumlah = float(data['JML'].replace('.', '').replace(',', '.'))
+        except ValueError:
+            return None, f"Format JML salah: '{data['JML']}'\nJML harus berupa angka, contoh: 5000000"
+
+        # Validasi ADM jika ada
+        admin = 0
+        if 'ADM' in data:
+            admin, adm_error = parse_adm(data['ADM'])
+            if adm_error:
+                return None, adm_error
 
         return {
             'divisi': data['DIVISI'].upper(),
             'asal': data['ASAL'],
             'tujuan': data['TUJUAN'],
-            'jumlah': float(data['JML'].replace('.', '').replace(',', '.')),
-            'admin': float(data['ADM'].replace('.', '').replace(',', '.')) if 'ADM' in data else 0
-        }
+            'jumlah': jumlah,
+            'admin': admin
+        }, None
+
     except Exception as e:
         print(f'Parse error: {e}')
-        return None
+        return None, None
 
 def format_rupiah(num):
     return f"Rp {int(num):,}".replace(',', '.')
@@ -83,6 +114,7 @@ async def format_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Divisi: BINUS / UNTAR / UBM / BRIO / MOA / PIM / MOI / MERPUT\n"
         "• Format rekening: BANK - NOMORREK - NAMA\n"
         "• Pakai spasi sebelum dan sesudah tanda -\n"
+        "• ADM harus berupa angka (contoh: 2500)\n"
         "• ADM boleh dikosongkan jika tidak ada biaya admin\n\n"
         "Contoh tanpa admin:\n\n"
         "DIVISI: Nama Web\n"
@@ -108,13 +140,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     sender = update.message.from_user.first_name if update.message.from_user else 'Unknown'
 
-    parsed = parse_message(text)
+    parsed, error_msg = parse_message(text)
 
     if not parsed:
-        await update.message.reply_text(
-            "❌ Format pesan salah!\n\n"
-            "Ketik /format untuk melihat format yang benar."
-        )
+        # Kalau ada pesan error spesifik (ADM/JML salah format), tampilkan
+        if error_msg:
+            await update.message.reply_text(
+                f"❌ {error_msg}\n\n"
+                f"Ketik /format untuk melihat format yang benar."
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Format pesan salah!\n\n"
+                "Ketik /format untuk melihat format yang benar."
+            )
         return
 
     if parsed['divisi'] not in DIVISI_MAP:
@@ -160,7 +199,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Error koneksi, coba lagi!")
 
 if __name__ == '__main__':
-    print("SincanPBB Bot v1.1 berjalan...")
+    print("SincanPBB Bot v1.2 berjalan...")
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler('format', format_command))
     app.add_handler(CommandHandler('list', list_command))
