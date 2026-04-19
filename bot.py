@@ -1,8 +1,10 @@
 # ============================================================
 # SincanPBB Telegram Bot
-# Versi  : v1.4
+# Versi  : v1.5
 # Update : April 2026
 # Changelog:
+#   v1.5 - Auto cleanup Global Lock yang expired setiap 1 menit
+#          Mencegah lock nyangkut tanpa perlu hapus manual
 #   v1.4 - Tambah divisi TIMNAS
 #   v1.3 - Ganti keyword DIVISI → WEB
 #          Bot yang kirim notif Done/Gagal (bukan Tampermonkey)
@@ -14,6 +16,7 @@
 # ============================================================
 
 import os
+import time
 import requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
@@ -23,6 +26,8 @@ from datetime import datetime
 BOT_TOKEN = os.environ.get('BOT_TOKEN', '8307314684:AAF_W5rHQAXjc4FMJMtAHAFDEUKVqfQl1F0')
 SUPABASE_URL = os.environ.get('SUPABASE_URL', 'https://szuatjsluscavohdgjuy.supabase.co')
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY', 'sb_publishable_SCssZgbMItHHpIV2v4H8Zw_i_rwgXXW')
+
+GLOBAL_LOCK_TIMEOUT_MS = 120000  # 2 menit dalam milliseconds
 
 DIVISI_MAP = {
     'BINUS':  'https://smartestbinus.com/mimin/adminarea',
@@ -35,28 +40,25 @@ DIVISI_MAP = {
     'TIMNAS': 'https://terbangtimnas.com/mimin/adminarea',
 }
 
-def supabase_insert(data):
-    url = f"{SUPABASE_URL}/rest/v1/antrian"
-    headers = {
+def supabase_headers():
+    return {
         'apikey': SUPABASE_KEY,
         'Authorization': f'Bearer {SUPABASE_KEY}',
         'Content-Type': 'application/json',
-        'Prefer': 'return=minimal'
     }
+
+def supabase_insert(data):
+    url = f"{SUPABASE_URL}/rest/v1/antrian"
+    headers = {**supabase_headers(), 'Prefer': 'return=minimal'}
     response = requests.post(url, json=data, headers=headers)
     print(f"[Supabase] {response.status_code} - {response.text}")
     return response.status_code == 201
 
 def supabase_mark_notified(row_id):
     url = f"{SUPABASE_URL}/rest/v1/antrian"
-    headers = {
-        'apikey': SUPABASE_KEY,
-        'Authorization': f'Bearer {SUPABASE_KEY}',
-        'Content-Type': 'application/json',
-    }
     params = {'id': f'eq.{row_id}'}
     try:
-        requests.patch(url, headers=headers, params=params, json={'notified': True}, timeout=10)
+        requests.patch(url, headers=supabase_headers(), params=params, json={'notified': True}, timeout=10)
     except Exception as e:
         print(f"[mark_notified error] {e}")
 
@@ -222,13 +224,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Background Job: Notif Done/Gagal ─────────────────────────
 async def check_done_transactions(context: ContextTypes.DEFAULT_TYPE):
     url = f"{SUPABASE_URL}/rest/v1/antrian"
-    headers = {
-        'apikey': SUPABASE_KEY,
-        'Authorization': f'Bearer {SUPABASE_KEY}',
-    }
     try:
         # Cek transaksi DONE
-        r = requests.get(url, headers=headers, params={
+        r = requests.get(url, headers=supabase_headers(), params={
             'status': 'eq.DONE',
             'notified': 'eq.false',
             'select': '*'
@@ -255,7 +253,7 @@ async def check_done_transactions(context: ContextTypes.DEFAULT_TYPE):
                     print(f"[notify done error] {e}")
 
         # Cek transaksi FAILED
-        r2 = requests.get(url, headers=headers, params={
+        r2 = requests.get(url, headers=supabase_headers(), params={
             'status': 'eq.FAILED',
             'notified': 'eq.false',
             'select': '*'
@@ -279,9 +277,43 @@ async def check_done_transactions(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print(f"[check_done error] {e}")
 
+# ─── Background Job: Auto Cleanup Global Lock ─────────────────
+async def cleanup_global_lock(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/tab_lock"
+        r = requests.get(url, headers=supabase_headers(), params={
+            'divisi': 'eq.GLOBAL',
+            'select': 'tab_id,updated_at'
+        }, timeout=10)
+
+        if r.status_code != 200:
+            return
+
+        data = r.json()
+        if not data:
+            return
+
+        lock = data[0]
+        now_ms = int(time.time() * 1000)
+        age_ms = now_ms - lock['updated_at']
+
+        if age_ms > GLOBAL_LOCK_TIMEOUT_MS:
+            # Lock expired → hapus otomatis
+            requests.delete(
+                f"{url}?divisi=eq.GLOBAL",
+                headers=supabase_headers(),
+                timeout=10
+            )
+            print(f"[Cleanup] ✅ Global lock expired ({age_ms}ms) → dihapus otomatis")
+        else:
+            print(f"[Cleanup] Global lock masih aktif ({age_ms}ms)")
+
+    except Exception as e:
+        print(f"[cleanup_global_lock error] {e}")
+
 # ─── Main ──────────────────────────────────────────────────────
 if __name__ == '__main__':
-    print("SincanPBB Bot v1.4 berjalan... (8 web aktif)")
+    print("SincanPBB Bot v1.5 berjalan... (8 web aktif)")
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler('start', start_command))
@@ -290,6 +322,10 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler('divisi', divisi_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
+    # Notif Done/Gagal setiap 5 detik
     app.job_queue.run_repeating(check_done_transactions, interval=5, first=10)
+
+    # Auto cleanup Global Lock setiap 1 menit
+    app.job_queue.run_repeating(cleanup_global_lock, interval=60, first=30)
 
     app.run_polling(drop_pending_updates=True)
