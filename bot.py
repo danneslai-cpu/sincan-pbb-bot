@@ -1,8 +1,9 @@
 # ============================================================
 # SincanPBB Telegram Bot
-# Versi  : v1.3
+# Versi  : v1.4
 # Update : April 2026
 # Changelog:
+#   v1.4 - Tambah divisi TIMNAS
 #   v1.3 - Ganti keyword DIVISI → WEB
 #          Bot yang kirim notif Done/Gagal (bukan Tampermonkey)
 #          Tambah command /start, /ping, /divisi
@@ -31,6 +32,7 @@ DIVISI_MAP = {
     'PIM':    'https://pimskibidi.com/mimin/adminarea',
     'MOI':    'https://moimewing.com/mimin/adminarea',
     'MERPUT': 'https://cueklatte.com/mimin/adminarea',
+    'TIMNAS': 'https://terbangtimnas.com/mimin/adminarea',
 }
 
 def supabase_insert(data):
@@ -279,7 +281,7 @@ async def check_done_transactions(context: ContextTypes.DEFAULT_TYPE):
 
 # ─── Main ──────────────────────────────────────────────────────
 if __name__ == '__main__':
-    print("SincanPBB Bot v1.3 berjalan... (7 web aktif)")
+    print("SincanPBB Bot v1.4 berjalan... (8 web aktif)")
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler('start', start_command))
