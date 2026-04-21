@@ -1,8 +1,13 @@
 # ============================================================
 # SincanPBB Telegram Bot
-# Versi  : v1.7
+# Versi  : v1.8
 # Update : April 2026
 # Filosofi: Cepat + Stabil + Tidak Berantakan
+#
+# Changelog v1.8:
+# - Auto-timeout transaksi PENDING > 10 menit jadi FAILED
+# - Notif peringatan dengan panduan troubleshooting
+# - Normalize em dash (—) jadi strip biasa (---) di parser
 #
 # Changelog v1.7:
 # - Keyword: DIVISI (seperti teman)
@@ -106,6 +111,8 @@ def parse_adm(value):
 def parse_single_transaction(text):
     """Parse 1 blok transaksi."""
     try:
+        # Normalize em dash (—) jadi strip biasa (autofix Telegram Desktop)
+        text = text.replace('——', '---').replace('—', '---')
         data = {}
         for line in text.strip().split('\n'):
             if ':' in line:
@@ -475,10 +482,84 @@ async def cleanup_old_data(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print(f"[Cleanup error] {e}")
 
+# ─── BACKGROUND JOB: AUTO-TIMEOUT PENDING > 10 MENIT ─────────
+async def timeout_stuck_transactions(context: ContextTypes.DEFAULT_TYPE):
+    """Transaksi PENDING/PROCESSING yang nyangkut >10 menit → jadi FAILED."""
+    cutoff = (datetime.now() - timedelta(minutes=10)).isoformat()
+    try:
+        # Ambil transaksi yang nyangkut
+        stuck = supabase_get({
+            'status': 'in.(PENDING,PROCESSING)',
+            'timestamp': f'lt.{cutoff}',
+            'select': '*'
+        })
+
+        for row in stuck:
+            # Mark sebagai FAILED_TIMEOUT
+            url = f"{SUPABASE_URL}/rest/v1/antrian"
+            try:
+                SESSION.patch(
+                    url,
+                    params={'id': f'eq.{row["id"]}'},
+                    json={
+                        'status': 'FAILED',
+                        'locked_by': None,
+                        'locked_at': None,
+                        'notified': False  # biar dikirim notif peringatan
+                    },
+                    timeout=10
+                )
+
+                # Kirim notif peringatan khusus timeout
+                mention = make_mention(row.get('user_id', 0), row.get('pengirim', 'User'))
+                msg = (
+                    f"⚠️ <b>Transaksi timeout</b>, {mention}!\n\n"
+                    f"Transaksi ini sudah menunggu lebih dari 10 menit tanpa diproses.\n\n"
+                    f"<b>Detail:</b>\n"
+                    f"Divisi: {row['divisi']}\n"
+                    f"Asal: {row['asal']}\n"
+                    f"Tujuan: {row['tujuan']}\n"
+                    f"Jumlah: {format_rupiah(row['jumlah'])}\n\n"
+                    f"<b>Kemungkinan penyebab:</b>\n"
+                    f"• Tab browser tidur (background throttling)\n"
+                    f"• Session website expired (perlu login ulang)\n"
+                    f"• Koneksi internet bermasalah\n"
+                    f"• Bot/Tampermonkey belum aktif\n\n"
+                    f"<b>Yang harus dicek:</b>\n"
+                    f"• Klik tab {row['divisi']} di browser\n"
+                    f"• Pastikan sudah login di panel\n"
+                    f"• Refresh tab (Ctrl+F5)\n"
+                    f"• Cek apakah Tampermonkey aktif\n\n"
+                    f"Silakan cek manual atau klik tombol di bawah untuk kirim ulang."
+                )
+
+                keyboard = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔄 Kirim Ulang", callback_data=f"retry|{row['id']}")
+                ]])
+                send_kwargs = {
+                    'chat_id': int(row['chat_id']),
+                    'text': msg,
+                    'parse_mode': 'HTML',
+                    'reply_markup': keyboard,
+                }
+                if row.get('message_id'):
+                    send_kwargs['reply_to_message_id'] = int(row['message_id'])
+                    send_kwargs['allow_sending_without_reply'] = True
+
+                await context.bot.send_message(**send_kwargs)
+                supabase_mark_notified(row['id'])
+                print(f"[Timeout] {row['id']} → FAILED (>10 min)")
+
+            except Exception as e:
+                print(f"[Timeout error] {row['id']}: {e}")
+
+    except Exception as e:
+        print(f"[Timeout job error] {e}")
+
 # ─── MAIN ─────────────────────────────────────────────────────
 if __name__ == '__main__':
     print("=" * 50)
-    print("SincanPBB Bot v1.7 berjalan")
+    print("SincanPBB Bot v1.8 berjalan")
     print(f"Divisi aktif: {', '.join(DIVISI_MAP.keys())}")
     print(f"Total: {len(DIVISI_MAP)} divisi")
     print("=" * 50)
@@ -499,5 +580,8 @@ if __name__ == '__main__':
 
     # Auto-cleanup data >7 hari setiap 6 jam
     app.job_queue.run_repeating(cleanup_old_data, interval=21600, first=60)
+
+    # Auto-timeout transaksi nyangkut >10 menit, cek tiap 1 menit
+    app.job_queue.run_repeating(timeout_stuck_transactions, interval=60, first=30)
 
     app.run_polling(drop_pending_updates=True)
