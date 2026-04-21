@@ -1,8 +1,13 @@
 # ============================================================
 # SincanPBB Telegram Bot
-# Versi  : v1.8
+# Versi  : v1.9
 # Update : April 2026
 # Filosofi: Cepat + Stabil + Tidak Berantakan
+#
+# Changelog v1.9:
+# - Fix batch insert gagal (tambah jeda 200ms antar insert)
+# - Anti spam 1-1-1: bot "marah" kalau user kirim 3+ transaksi <60 detik
+# - Notif gabungan batch menampilkan semua transaksi
 #
 # Changelog v1.8:
 # - Auto-timeout transaksi PENDING > 10 menit jadi FAILED
@@ -167,6 +172,12 @@ def make_mention(user_id, first_name):
     """Buat mention link yang bisa di-klik."""
     safe_name = (first_name or 'User').replace('<', '').replace('>', '').replace('&', '')
     return f'<a href="tg://user?id={user_id}">{safe_name}</a>'
+
+# ─── ANTI SPAM TRACKING ──────────────────────────────────────
+# Untuk deteksi user yang kirim transaksi 1-1-1 padahal bisa batch
+user_send_times = {}  # {user_id: [timestamp1, timestamp2, ...]}
+last_scold_time = {}  # {user_id: last_scold_timestamp}
+
 
 # ─── COMMAND HANDLERS ────────────────────────────────────────
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -353,9 +364,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"[Handler] Semua divisi bukan milik bot ini, silent ignore.")
         return
 
+    # Anti-spam: cek kalau user kirim 3+ transaksi satu-satu dalam 60 detik
+    if len(valid_transactions) == 1 and user_id:
+        import time as _time
+        now_ts = _time.time()
+        if user_id not in user_send_times:
+            user_send_times[user_id] = []
+        # Buang timestamp yang lebih dari 60 detik
+        user_send_times[user_id] = [t for t in user_send_times[user_id] if now_ts - t < 60]
+        user_send_times[user_id].append(now_ts)
+        # Kalau sudah 3+ dalam 60 detik, bot marah (cooldown 5 menit biar tidak spam)
+        if len(user_send_times[user_id]) >= 3:
+            last_scold = last_scold_time.get(user_id, 0)
+            if now_ts - last_scold > 300:
+                await update.message.reply_text(
+                    "Eh bos! 😤 Dari tadi kirim 1-1-1 terus. "
+                    "Kan bisa pakai --- biar sekaligus 3 transaksi!"
+                )
+                last_scold_time[user_id] = now_ts
+                user_send_times[user_id] = []
+
     # Proses setiap transaksi valid
+    import time as _time_insert
     success_count = 0
-    for parsed in valid_transactions:
+    for idx, parsed in enumerate(valid_transactions):
         row = {
             'id': str(uuid.uuid4()),
             'timestamp': datetime.now().isoformat(),
@@ -374,6 +406,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         if supabase_insert(row):
             success_count += 1
+        # Jeda 200ms antar insert biar Supabase tidak overwhelm (fix batch bug)
+        if idx < len(valid_transactions) - 1:
+            _time_insert.sleep(0.2)
 
     # Kirim 1 notif gabungan
     if success_count == 0:
@@ -559,7 +594,7 @@ async def timeout_stuck_transactions(context: ContextTypes.DEFAULT_TYPE):
 # ─── MAIN ─────────────────────────────────────────────────────
 if __name__ == '__main__':
     print("=" * 50)
-    print("SincanPBB Bot v1.8 berjalan")
+    print("SincanPBB Bot v1.9 berjalan")
     print(f"Divisi aktif: {', '.join(DIVISI_MAP.keys())}")
     print(f"Total: {len(DIVISI_MAP)} divisi")
     print("=" * 50)
